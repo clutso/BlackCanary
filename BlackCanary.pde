@@ -22,7 +22,7 @@
  *  http://www.infotec.mx 
  *  
  *  This program is free software: you can redistribute it and/or modify 
- *  it under the terms of the GNU General Public License as published by 
+ *  it under the terms of the GNU General Public License as published by  
  *  the Free Software Foundation, either version 3 of the License, or 
  *  (at your option) any later version. 
  *  
@@ -34,35 +34,33 @@
  *  You should have received a copy of the GNU General Public License 
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>. 
  *  
- *  Version:           1.0
+ *  Version:           1.1
  *  Design:            Pedro Jesús Luna López
  *  Implementation:    Pedro Jesús Luna López
  *  ReleaseNotes:
  *    
- *  - First version ever (use at your own risk). 
- *  - A lot of features to optimize  
- *  - Tons of bugs detected
+ *  - ZigbeeSupport. 
+ *  - low energy implemented  
+ *  - File management corrected
  *  
  */
 
+#define FDATAONSD 4094
 #include <WaspStackEEPROM.h>
 #include <WaspFrame.h>
-//#include <WaspXBee802.h>
+#include <WaspXBee802.h>
 #include <WaspSensorGas_Pro.h>
-#include <WaspWIFI.h>
 
-int firstTime=65000;
-int rounds=65000;
-int framesGen= 65000;
-int batt=64999;
-//char* RX_ADDRESS= "0013A20040D7ED0F" ;
-//uint8_t  panID[2] = {0x33,0x32}; 
-//uint8_t  channel = 0x0B;
-//uint8_t encryptionMode = 1;
-//char*  encryptionKey= "WaspmoteLinkKey!"; 
+uint8_t firstTime=65000;
+uint8_t rounds=65000;
+uint8_t framesGen= 65000;
+uint8_t batt=64999;
+
+char* RX_ADDRESS= "0013A20040D7ED0F" ;
 char* WASPMOTE_ID="BlackCanary";
-
-///uint8_t dataONSD=0;
+uint8_t bEEPROM=99;
+char toWrite[100];
+uint8_t frameSD[100];
 
 Gas CO(SOCKET_1);
 Gas SO2(SOCKET_2);
@@ -71,373 +69,343 @@ Gas NO2(SOCKET_4);
 bmeGasesSensor  bme;
 uint8_t socket=SOCKET0;
 
-void writeonSD()
+int writeonSD()
 {
-  switch (stack.pop(frame.buffer))
+  if (bEEPROM)
     {
-      case 0:
+    switch (stack.pop(frame.buffer))
       {
-        USB.print ("Empty Frame... discarding  ");
-        }
-        break;
-      
-      case 1:
-      {
-        USB.print ("I/O Reading error :0  ");
-        }
-        break;
-        
-      case 2:
-      {
-        USB.print ("Error updating the new pointer :( ");
-        }
-        break;
-        
-      default:
-        USB.println ("Bytes read from EEPROM. Ready 2 send.  ");
+        case 0:
+        {
+          USB.print ("Empty Frame... discarding  ");
+          return 0;
+          }
+          break;
+        case 1:
+        {
+          USB.print ("I/O Reading error :0  ");
+          return 0;
+          }
+          break;
+        case 2:
+        {
+          USB.print ("Error updating the new pointer :( ");
+          return 0;
+          }
+          break;
+        default:
+          {
+          USB.println ("Bytes read from EEPROM. Ready 2 send.  ");     
+          }
         break; 
       }
-      SD.ON();
-      SdFile file; 
-      const char* fileName = "Data.TXT";
- //     SD.create(fileName);
-      SD.openFile(fileName, &file, O_APPEND );
-      SD.ls();
-      for( int i= 0; i < frame.length ; i++ )
-        {   
-          char temp=(char)frame.buffer[i];
-          SD.append(fileName, &temp);
-         }
-      SD.appendln(fileName, "");
-      SD.closeFile(&file);     
-      SD.OFF();
-
-        Utils.writeEEPROM(4094,0x01);
-      //dataONSD=1;
+     }
+  SD.ON();
+  SdFile file; 
+  char* fileName = "Data.TXT";
+  SD.openFile(fileName, &file, O_APPEND );
+  memset(toWrite, 0x00, sizeof(toWrite) );
+  Utils.hex2str( frame.buffer, toWrite, frame.length);
+  SD.appendln(fileName, toWrite);
+  SD.showFile(fileName);
+  SD.closeFile(&file);     
+  SD.OFF();
+  if (!Utils.readEEPROM(FDATAONSD))
+    {
+      Utils.writeEEPROM(FDATAONSD,0x01);
+    }
+  return 1;
 }
 
-void storeInEEPROM()
+
+int storeInEEPROM()
 {
    switch (stack.push(frame.buffer, frame.length))
     {
       case 0:
       {
-        USB.print ("Error writing on EEPROM :( saving on SD");
-        writeonSD();
+        USB.print (F("Error writing on EEPROM :( saving on SD"));
+        return 0;
         }
-        break;
-      
+        break;      
       case 1:
       {
-        USB.print ("writting on EEPROM ");
+        USB.print (F("writting on EEPROM "));
+        return 1;
         }
         break;
-        
       case 2:
       {
-        USB.print (" EEPROM full , swapping data to SD card ");
-        
-          for (int x=0;x<10; x++)
-          {          
-          writeonSD();
-          }
-        }
+        USB.print (F(" EEPROM full , swapping data to SD card "));
+          return 0;
+         }
         break;
-        
       case 3:
       {
-        USB.print ("Block size Small try another size... ");
+        USB.print (F("Block size Small try another size... "));
+        return -1;
         }
         break;
       default:
         USB.println ("Hubo un error en la matrix :(  ");
+        return -1;
         break; 
       }
   }
 
+
 int send2Ground()
 {
-WIFI.ON(socket);
-WIFI.join("meshlium");
-     if ( WIFI.sendHTTPframe(IP,"10.10.10.1", 80, frame.buffer, frame.length))
-        {
-       USB.printf("\n\nconnection succeed\n");
-        //USB.println(WIFI.answer);
-        USB.printf("\n\n\n");
-        delay (2000);
-        WIFI.OFF();
-        return 1; 
-        }
- 
-    else
-      {
-
-          USB.println("connection failed :( Writting  on EEPROM"); 
-          delay (2000);
-          WIFI.OFF();
-          return 0;
-        }
-  /*
+  xbee802.ON();
   xbee802.getChannel();
-  USB.print(F("channel: "));
-  USB.printHex(xbee802.channel);
-  USB.println();
-
   xbee802.getPAN();
-  USB.print(F("panid: "));
-  USB.printHex(xbee802.PAN_ID[0]); 
-  USB.printHex(xbee802.PAN_ID[1]); 
-  USB.println(); 
-
   xbee802.getEncryptionMode();
-  USB.print(F("encryption mode: "));
-  USB.printHex(xbee802.encryptMode);
-  USB.println(); 
+  frame.showFrame();
 
-  USB.println(F("-------------------------------")); 
-  
-  if (0 == xbee802.send(RX_ADDRESS, frame.buffer, frame.length))
-  {
-    USB.println(F("Message delivered"));
+  int e=xbee802.send(RX_ADDRESS, frame.buffer, frame.length);
+  if (0 == e)
+    {
+      USB.println(F("Message delivered"));
     }
     else 
     {
-    USB.println(F("Message sent, but not delivered ")); 
+      USB.printf("Message sent, but not delivered Error: %d",e); 
+      return 0 ;
     }
-//  xbee802.OFF();
-  */
-  return 0;
+  xbee802.OFF();
+  return 1;
 }
 
-int lo_batt_mode()
-{
-     return 0; 
-}
-
-void initXbee()
-{
-  /*
-  xbee802.ON();
-  xbee802.setChannel( channel );
-  if( xbee802.error_AT == 0 ) 
-  {
-    USB.print(F("1. Channel set OK to: 0x"));
-    USB.printHex( xbee802.channel );
-    USB.println();
-  }
-  else 
-  {
-    USB.println(F("1. Error calling 'setChannel()'"));
-  }
-  xbee802.setPAN( panID );
-
-  // check the AT commmand execution flag
-  if( xbee802.error_AT == 0 ) 
-  {
-    USB.print(F("2. PAN ID set OK to: 0x"));
-    USB.printHex( xbee802.PAN_ID[0] ); 
-    USB.printHex( xbee802.PAN_ID[1] ); 
-    USB.println();
-  }
-  else 
-  {
-    USB.println(F("2. Error calling 'setPAN()'"));  
-  }
-
-  xbee802.setEncryptionMode( encryptionMode );
-    if( xbee802.error_AT == 0 ) 
-  {
-    USB.print(F("3. AES encryption configured (1:enabled; 0:disabled):"));
-    USB.println( xbee802.encryptMode, DEC );
-  }
-  else 
-  {
-    USB.println(F("3. Error calling 'setEncryptionMode()'"));
-  }
-
-  xbee802.setLinkKey( encryptionKey );
-  if( xbee802.error_AT == 0 ) 
-  {
-    USB.println(F("4. AES encryption key set OK"));
-  }
-  else 
-  {
-    USB.println(F("4. Error calling 'setLinkKey()'")); 
-  }
-  xbee802.writeValues();
-
-  if( xbee802.error_AT == 0 ) 
-  {
-    USB.println(F("5. Changes stored OK"));
-  }
-  else 
-  {
-    USB.println(F("5. Error calling 'writeValues()'"));   
-  }
-
-  USB.println(F("-------------------------------")); 
-
-  */
-  }
 
 int framesFromSensors(int part)
 {
-  switch (part)
-  {
-  case 1:
-  {
-  CO.ON();
-  SO2.ON();
-  bme.ON();
-  O3.ON();
-  frame.createFrame(ASCII, WASPMOTE_ID);
-  framesGen++;
-
-  frame.addSensor(SENSOR_GP_TC,   bme.getTemperature());
-  frame.addSensor(SENSOR_GP_HUM, bme.getHumidity());
-  frame.addSensor(SENSOR_GP_PRES, bme.getPressure());  
-   
-  frame.addSensor(SENSOR_GP_CO, CO.getConc());
-  frame.addSensor(SENSOR_GP_TC, CO.getTemp());
-  frame.addSensor(SENSOR_GP_HUM, CO.getHumidity());
-  frame.addSensor(SENSOR_GP_PRES, CO.getPressure());  
+    frame.setFrameSize(90);
+    frame.createFrame(BINARY, WASPMOTE_ID);
+    framesGen++;
+    switch (part)
+      {
+        case 1:
+        {
+          bme.ON();
+          CO.ON();
+          SO2.ON();
+    
+          frame.addSensor(SENSOR_GP_TC,   bme.getTemperature());
+          frame.addSensor(SENSOR_GP_HUM, bme.getHumidity());
+          frame.addSensor(SENSOR_GP_PRES, bme.getPressure());  
+    
+          frame.addSensor(SENSOR_GP_CO, CO.getConc());
+          frame.addSensor(SENSOR_GP_TC, CO.getTemp());
+          frame.addSensor(SENSOR_GP_HUM, CO.getHumidity());
+          frame.addSensor(SENSOR_GP_PRES, CO.getPressure());  
+    
+          frame.addSensor(SENSOR_GP_SO2, SO2.getConc());
+          frame.addSensor(SENSOR_GP_TC, SO2.getTemp());
+          frame.addSensor(SENSOR_GP_HUM , SO2.getHumidity());
+          frame.addSensor(SENSOR_GP_PRES, SO2.getPressure());  
   
-  frame.addSensor(SENSOR_GP_SO2, SO2.getConc());
-  frame.addSensor(SENSOR_GP_TC, SO2.getTemp());
-  frame.addSensor(SENSOR_GP_HUM , SO2.getHumidity());
-  frame.addSensor(SENSOR_GP_PRES, SO2.getPressure());  
+          bme.OFF();
+          CO.OFF();
+          SO2.OFF();
+  
+        }
+      break; 
+      case 2:
+        {
+          O3.ON();
+          NO2.ON();
+   
+          frame.addSensor(SENSOR_GP_O3, O3.getConc());
+          frame.addSensor(SENSOR_GP_TC, O3.getTemp());
+          frame.addSensor(SENSOR_GP_HUM, O3.getHumidity());
+          frame.addSensor(SENSOR_GP_PRES, O3.getPressure());  
 
-  frame.addSensor(SENSOR_GP_O3, O3.getConc());
-  frame.addSensor(SENSOR_GP_TC, O3.getTemp());
-  frame.addSensor(SENSOR_GP_HUM, O3.getHumidity());
-  frame.addSensor(SENSOR_GP_PRES, O3.getPressure());  
+          frame.addSensor(SENSOR_GP_NO2, NO2.getConc());
+          frame.addSensor(SENSOR_GP_TC, NO2.getTemp());
+          frame.addSensor(SENSOR_GP_HUM, NO2.getHumidity());
+          frame.addSensor(SENSOR_GP_PRES, NO2.getPressure());  
 
-  frame.showFrame();
-  bme.OFF();
-  CO.OFF();
-  SO2.OFF();
-  O3.OFF();
-  }
-  break; 
-  case 2:
-  {
-  NO2.ON();
-  frame.createFrame(ASCII, WASPMOTE_ID);
-  framesGen++;
-
-  frame.addSensor(SENSOR_GP_NO2, NO2.getConc());
-  frame.addSensor(SENSOR_GP_TC, NO2.getTemp());
-  frame.addSensor(SENSOR_GP_HUM, NO2.getHumidity());
-  frame.addSensor(SENSOR_GP_PRES, NO2.getPressure());  
-  frame.showFrame();
-  NO2.OFF();
-  }
-  break;
-  default :
-  {
-  USB.println("nothing 2 DO");  
-    }
-  break;
-  }
+          O3.OFF();
+          NO2.OFF();
+       }
+      break;
+      default :
+        {
+          USB.println("nothing 2 DO");  
+        }
+      break;
+      }
 }
 
 
 
 int framesFromFile()
 {
-      SD.ON();
-      SdFile file; 
-      const char* fileName = "Data.TXT";
-      SD.openFile(fileName, &file, O_RDWR );
-      int l=0;
-      int i=0;
-      int32_t lines=SD.numln(fileName);
-      SD.cat(fileName,0, 255);
-      USB.printf("This file has %d lines.. enjoy...\n", lines);
-      frame.createFrame(ASCII, WASPMOTE_ID);
-      frame.length=255;
-      while(l<lines)
+  int8_t error=0;
+  int8_t l=0;
+  int8_t i=0;
+  int32_t lines=0;
+  SdFile file; 
+  char* fileName = "Data.TXT";
+  SdFile swapFile; 
+  char* swapFileName = "Swap.TXT";
+  USB.println("Frames From File");
+  Utils.writeEEPROM(FDATAONSD,0x00);
+  SD.ON();
+  SD.openFile(fileName, &file, O_READ );
+  lines=SD.numln(fileName);
+  for (l=0; l<lines; l++)
+  {
+    SD.catln(fileName,l,1);      
+    memset(frameSD, 0x00, sizeof(frameSD) ); 
+    Utils.str2hex(SD.buffer, frameSD);
+    frame.createFrame(BINARY, WASPMOTE_ID);
+    frame.length=90;
+    for (i=0;i<90; i++)
+      {
+        frame.buffer[i]=frameSD[i];
+      }
+    if (!send2Ground())
+     {
+      if (l==0)
+       {
+          USB.println("Still offline, appending data");
+          SD.closeFile(&file); 
+          SD.OFF();
+          return 0;
+       }
+      error = 1;
+      USB.println("connection failed");
+      SD.create(swapFileName);
+      SD.openFile(swapFileName, &swapFile, O_APPEND );
+      SD.append(swapFileName, SD.buffer);
+      SD.closeFile(&swapFile);
+      if (!Utils.readEEPROM(FDATAONSD))
         {
-         if ((i>0)&&(SD.buffer[i-1]==0x0d && SD.buffer[i]==0x0a))
-         {
-          l++;
-            frame.length=i;
-            SD.cat(fileName, frame.length+1, 255);
-            i=0;
-            USB.printf("Finnishing process of line: %d\n", l);                
-            send2Ground();
-            frame.createFrame(ASCII, WASPMOTE_ID);
-            frame.length=255;
-         }
-         else 
-         {
-          frame.buffer[i] = SD.buffer[i];
-           USB.printf("%c", frame.buffer[i]);
+        Utils.writeEEPROM(FDATAONSD,0x01);
+        }  
+    }
+  }
+  SD.closeFile(&file); 
+  SD.del(fileName);
+  SD.create(fileName);
+  if(error)
+    {
+     USB.println("Swaping data");
+     Utils.writeEEPROM(FDATAONSD,0x01);
+     SD.openFile(fileName, &file, O_APPEND );
+     SD.openFile(swapFileName, &swapFile, O_APPEND );
+     lines=SD.numln(swapFileName);
+     for(l=0; l<lines; l++)
+       { 
+        SD.catln( swapFileName, l, 1); 
+        SD.append(fileName, SD.buffer);
+       }
+     SD.showFile(fileName);
+     SD.closeFile(&file);
+     SD.closeFile(&swapFile);     
+     SD.del(swapFileName);
+     SD.ls();
+     SD.OFF();
+     return 0;
+   }
+  SD.ls(); 
+  SD.OFF();
+  USB.println("Getting out clean ");
+  return 1;
+  }
+ 
+int lo_batt_mode()
+{
+  
+  USB.println("lo batt mode");
+  for (int x=1; x<3;x++)
+      {
+        framesFromSensors(x);
+        if (!storeInEEPROM())
+        {
+          bEEPROM=1;
+          while (writeonSD())
+            {
+              USB.println(F("lines wrote on SD"));            
+            }
           }
-          i++;
-         }
-         
-      SD.closeFile(&file); 
-      SD.del(fileName);    
-      SD.create(fileName);
-      SD.ls(); 
-      SD.OFF();
-    Utils.writeEEPROM(4094,0x0); //camiar a 0
+      }      
+  if (!Utils.readEEPROM(FDATAONSD))
+      {
+        Utils.writeEEPROM(FDATAONSD,0x01);
+      }
+  USB.println(RTC.getTime()); 
+  return 1;
 }
+
+
 
 int normal_mode()
 {
-  if (Utils.readEEPROM(4094))
-    {
-    framesFromFile();
-    return 0;
-    }
-  else 
-    {
-    for (int x=1; x<3;x++)
-      {
-        framesFromSensors(x);
-        if (send2Ground())
-        {
-          (" packet %d sent",x);
-          //return 0;
-        }
-        else 
+    if (Utils.readEEPROM(FDATAONSD))
+       {
+        USB.println("Trying to reach the cloud");
+        if (framesFromFile())
           {
-            storeInEEPROM();
-  //      return 0;
-          }      
-
+            USB.println("success! data sincronized :D");
+          }
+          else 
+          {
+            for (int x=1; x<3;x++)
+              {
+                framesFromSensors(x);
+                bEEPROM=0;    
+                USB.println("Still offline... Saving on SD");
+                writeonSD();
+                
+              }
+            if (!Utils.readEEPROM(FDATAONSD))
+                {
+                  Utils.writeEEPROM(FDATAONSD,0x01);
+                }  
+          }
         }
-      return 0;        
-    }  
-USB.println(RTC.getTime()); 
+    else
+      {  
+      for (int x=1; x<3;x++)
+        {
+        USB.println("Acquiring Data");
+        framesFromSensors(x);
+        //send2Ground();
+        if (!send2Ground())
+          {
+          bEEPROM=0;    
+          USB.println("Conection lost, going offline... Saving on SD");
+            writeonSD();
+            if (!Utils.readEEPROM(FDATAONSD))
+            {
+              Utils.writeEEPROM(FDATAONSD,0x01);
+            }
+          }
+         }
+        }
 return 1;
 }
 
 
-
-
-
-
-
 void sensing ()
 {
+  
   if (batt< 15)
     {
-      if (lo_batt_mode())
+      if (!lo_batt_mode())
         {
         USB.println(F("hola, soy una execpion de bateria baja"));//handle exeption 
         }
     }
     else
     { 
-      if (normal_mode())
+      if (!normal_mode())
         {
           USB.println(F("hola, soy una execpion en modo normal"));//handle exeption
         }
     }
- USB.println(freeMemory());
 }
 
 void sleepOnLand()
@@ -461,68 +429,97 @@ if (intFlag & ACC_INT)
     }
 clearIntFlag();
 PWR.clearInterruptionPin();
-}
 
+}
 
 void workingSchedule()
 {
   if (RTC.hour>17||RTC.day>6||RTC.day<2)
   {
-    USB.println(F("Going 2 sleep"));
+    USB.println(F("Out of workhours... goodbye..  "));
     PWR.hibernate("00:14:00:00", RTC_OFFSET, RTC_ALM1_MODE3);
    }
   }
 
-void initWifi()
-{
 /*
-  USB.println("trying wifi"); 
-  WIFI.setDHCPoptions(DHCP_ON);
-  USB.println("Working with dhcp"); 
-  WIFI.setESSID("meshlium");
-  USB.println("conecting to meshlium");
-  WIFI.setConnectionOptions(HTTP|CLIENT_SERVER);
-  WIFI.setAutojoinAuth(OPEN);
-  WIFI.setJoinMode(AUTO_STOR);
-  WIFI.setJoinMode(MANUAL);
-  WIFI.storeData();
-  USB.println("Data Saved"); 
-  */
-  WIFI.ON(SOCKET0);
-  USB.println("trying connection"); 
-  WIFI.join("meshlium");
-  if(WIFI.isConnected(5000)==true)
+void initXbee()
+{
+  xbee802.ON();
+  xbee802.setChannel( channel );
+  if( xbee802.error_AT == 0 ) 
   {
-      USB.println("connection succed"); 
-      }
-  else{
-          USB.println("connection failed :("); 
-    }
-  
-  WIFI.OFF();
+    USB.print(F("1. Channel set OK to: 0x"));
+    USB.printHex( xbee802.channel );
+    USB.println();
   }
-
+  else 
+  {
+    USB.println(F("1. Error calling 'setChannel()'"));
+  }
+  xbee802.setPAN( panID );
+  // check the AT commmand execution flag
+  if( xbee802.error_AT == 0 ) 
+  {
+    USB.print(F("2. PAN ID set OK to: 0x"));
+    USB.printHex( xbee802.PAN_ID[0] ); 
+    USB.printHex( xbee802.PAN_ID[1] ); 
+    USB.println();
+  }
+  else 
+  {
+    USB.println(F("2. Error calling 'setPAN()'"));  
+  }
+  xbee802.setEncryptionMode( encryptionMode );
+    if( xbee802.error_AT == 0 ) 
+  {
+    USB.print(F("3. AES encryption configured (1:enabled; 0:disabled):"));
+    USB.println( xbee802.encryptMode, DEC );
+  }
+  else 
+  {
+    USB.println(F("3. Error calling 'setEncryptionMode()'"));
+  }
+  xbee802.setLinkKey( encryptionKey );
+  if( xbee802.error_AT == 0 ) 
+  {
+    USB.println(F("4. AES encryption key set OK"));
+  }
+  else 
+  {
+    USB.println(F("4. Error calling 'setLinkKey()'")); 
+  }
+  xbee802.writeValues();
+  if( xbee802.error_AT == 0 ) 
+  {
+    USB.println(F("5. Changes stored OK"));
+  }
+  else 
+  {
+    USB.println(F("5. Error calling 'writeValues()'"));   
+  }
+  USB.println(F("-------------------------------")); 
+  }
+*/
 void setup()
 {
   stack.initStack(FIFO_MODE);
-  stack.initBlockSize(255);
-  USB.print("stack ready 2 go ");
-//  Utils.setLED(LED0, LED_OFF);
-//  Utils.setLED(LED1, LED_OFF);
+  stack.initBlockSize(90);
+  USB.print("stack ready 2 go \n");
+  //  Utils.setLED(LED0, LED_OFF);
+  //  Utils.setLED(LED1, LED_OFF);
   USB.ON();
-  initWifi();
-  //frame.setFrameSize(XBEE_802_15_4, UNICAST_16B,ENABLED, ENABLED );
-//  initXbee();
-  
+  // initXbee();
   bme.ON();
-  frame.setFrameSize(255);
-  frame.setID(WASPMOTE_ID);
   framesGen=0;
   rounds=0;
   batt=100;
-//put the right date&Time then Uncomment and upload to set RTC
-//RTC.setTime("18:05:24:05:17:28:00");
+  //put the right date&Time then Uncomment and upload to set RTC
+  //RTC.setTime("18:06:25:02:20:29:00");
 }
+
+
+
+
 
 void loop()
 {
@@ -530,16 +527,14 @@ if (rounds<=60000)
   {
    workingSchedule();
    batt=(uint8_t) PWR.getBatteryLevel();
+   USB.println(RTC.getTime()); 
    USB.printf("%d o/o battery remain\n", batt);
-   sleepOnLand();
-   //sensing();
+  sleepOnLand();
   }
 else 
   {
     USB.println(F("RERESHING SYSTEM WAIT PLEASE ..."));
     PWR.reboot(); 
   }
+
 }
-
-
-
